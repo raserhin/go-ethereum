@@ -1598,6 +1598,52 @@ func (api *TransactionAPI) SendTransaction(ctx context.Context, args Transaction
 	return SubmitTransaction(ctx, api.b, signed)
 }
 
+// SendTransaction creates a transaction for the given argument, sign it and submit it to the
+// transaction pool.
+//
+// This API is not capable for submitting blob transaction with sidecar.
+func (api *TransactionAPI) SendTransactionSync(ctx context.Context, args TransactionArgs, timeoutMilis *int64) (map[string]any, error) {
+	var pollingInterval time.Duration = 1 * time.Millisecond
+
+	var timeout time.Duration
+	if timeoutMilis == nil {
+		timeout = 2 * time.Second
+	} else {
+		timeout = time.Duration(*timeoutMilis * int64(time.Millisecond))
+	}
+
+	hash, err := api.SendTransaction(ctx, args)
+	if err != nil {
+		return nil, err
+	}
+
+	timeoutTimer := time.NewTimer(timeout)
+	logCh := make(chan []*types.ChainEvent)
+	sub := api.b.SubscribeChainEvent(logCh)
+	ticker := time.NewTicker(pollingInterval)
+	defer timeoutTimer.Stop()
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-timeoutTimer.C:
+			return nil, &syncTimeoutError{timeout, hash}
+		case logs := <-logCh:
+			for _, log := range logs {
+				if log.TxHash == hash {
+					sub.Unsubscribe()
+				}
+			}
+		case <-ticker.C:
+			receipt, err := api.GetTransactionReceipt(ctx, hash)
+			if err == nil && receipt != nil {
+				return receipt, nil
+			}
+		}
+
+	}
+}
+
 // FillTransaction fills the defaults (nonce, gas, gasPrice or 1559 fields)
 // on a given unsigned transaction, and returns it to the caller for further
 // processing (signing + broadcast).
@@ -1634,6 +1680,42 @@ func (api *TransactionAPI) SendRawTransaction(ctx context.Context, input hexutil
 		return common.Hash{}, err
 	}
 	return SubmitTransaction(ctx, api.b, tx)
+}
+
+// SendRawTransaction will add the signed transaction to the transaction pool.
+// The sender is responsible for signing the transaction and using the correct nonce.
+func (api *TransactionAPI) SendRawTransactionSync(ctx context.Context, input hexutil.Bytes, timeoutMilis *int64) (map[string]any, error) {
+	var pollingInterval time.Duration = 1 * time.Millisecond
+
+	var timeout time.Duration
+	if timeoutMilis == nil {
+		timeout = 2 * time.Second
+	} else {
+		timeout = time.Duration(*timeoutMilis * int64(time.Millisecond))
+	}
+
+	hash, err := api.SendRawTransaction(ctx, input)
+	if err != nil {
+		return nil, err
+	}
+
+	timeoutTimer := time.NewTimer(timeout)
+	ticker := time.NewTicker(pollingInterval)
+	defer timeoutTimer.Stop()
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-timeoutTimer.C:
+			return nil, &syncTimeoutError{timeout, hash}
+		case <-ticker.C:
+			receipt, err := api.GetTransactionReceipt(ctx, hash)
+			if err == nil {
+				return receipt, nil
+			}
+		}
+
+	}
 }
 
 // Sign calculates an ECDSA signature for:

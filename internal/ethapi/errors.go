@@ -19,8 +19,10 @@ package ethapi
 import (
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/ethereum/go-ethereum/accounts/abi"
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/vm"
@@ -94,6 +96,7 @@ func (e *invalidTxError) Error() string  { return e.Message }
 func (e *invalidTxError) ErrorCode() int { return e.Code }
 
 const (
+	errCodeSyncTimeout             = 4001
 	errCodeNonceTooHigh            = -38011
 	errCodeNonceTooLow             = -38010
 	errCodeIntrinsicGas            = -38013
@@ -168,3 +171,14 @@ type blockGasLimitReachedError struct{ message string }
 
 func (e *blockGasLimitReachedError) Error() string  { return e.message }
 func (e *blockGasLimitReachedError) ErrorCode() int { return errCodeBlockGasLimitReached }
+
+type syncTimeoutError struct {
+	timeout time.Duration
+	hash    common.Hash
+}
+
+func (e *syncTimeoutError) Error() string {
+	return fmt.Sprintf("The transaction was added to the mempool but wasn't processed in %s.", e.timeout.String())
+}
+func (e *syncTimeoutError) ErrorCode() int         { return errCodeSyncTimeout }
+func (e *syncTimeoutError) ErrorData() interface{} { return e.hash.String() }
